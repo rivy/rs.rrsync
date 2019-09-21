@@ -37,6 +37,20 @@ fn main() {
                         .takes_value(true)
                         .default_value("rssync.idx"),
                 ),
+        )
+        .subcommand(
+            SubCommand::with_name("sync")
+                .about("Copy files")
+                .arg(
+                    Arg::with_name("source")
+                        .required(true)
+                        .takes_value(true),
+                )
+                .arg(
+                    Arg::with_name("destination")
+                        .required(true)
+                        .takes_value(true),
+                )
         );
 
     let mut cli = cli;
@@ -82,6 +96,15 @@ fn main() {
 
             Ok(())
         }(),
+        Some("sync") => {
+            let s_matches = matches.subcommand_matches("index").unwrap();
+            let source = s_matches.value_of_os("source").unwrap();
+            let destination = s_matches.value_of_os("destination").unwrap();
+
+            // TODO
+
+            Ok(())
+        }
         _ => {
             cli.print_help().expect("Can't print help");
             std::process::exit(2);
