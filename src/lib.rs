@@ -55,7 +55,7 @@ impl From<std::io::Error> for Error {
 }
 
 /// Type for the hashes
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct HashDigest([u8; 20]);
 
 impl ToSql for HashDigest {
