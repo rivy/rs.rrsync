@@ -107,8 +107,8 @@ pub struct IndexTransaction<'a> {
     tx: Transaction<'a>,
 }
 
-const ZPAQ_BITS: usize = 13; // 13 bits = 8 KiB block average
-const MAX_BLOCK_SIZE: usize = 1 << 15; // 32 KiB
+pub const ZPAQ_BITS: usize = 13; // 13 bits = 8 KiB block average
+pub const MAX_BLOCK_SIZE: usize = 1 << 15; // 32 KiB
 
 impl<'a> IndexTransaction<'a> {
     /// Add a file to the index
@@ -165,6 +165,55 @@ impl<'a> IndexTransaction<'a> {
             )?;
             let file_id = self.tx.last_insert_rowid();
             Ok((file_id as u32, false))
+        }
+    }
+
+    /// Replace file in the index
+    ///
+    /// This is like add_file but will always replace an existing file.
+    pub fn add_file_overwrite(
+        &mut self,
+        name: &Path,
+        modified: chrono::DateTime<chrono::Utc>,
+    ) -> Result<u32, Error>
+    {
+        let mut stmt = self.tx.prepare(
+            "
+            SELECT file_id, modified FROM files
+            WHERE name = ?;
+            ",
+        )?;
+        let mut rows = stmt.query(&[name.to_str().expect("encoding")])?;
+        if let Some(row) = rows.next() {
+            let row = row?;
+            let file_id: u32 = row.get(0);
+            info!("Resetting file {:?}", name);
+            // Delete blocks
+            self.tx.execute(
+                "
+                DELETE FROM blocks WHERE file_id = ?;
+                ",
+                &[&file_id],
+            )?;
+            // Update modification time
+            self.tx.execute(
+                "
+                UPDATE files SET modified = ? WHERE file_id = ?;
+                ",
+                &[&modified as &dyn ToSql, &file_id],
+            )?;
+            Ok(file_id)
+        } else {
+            info!("Inserting new file {:?}", name);
+            self.tx.execute(
+                "
+                INSERT INTO files(name, modified)
+                VALUES(?, ?);
+                ",
+                &[&name.to_str().expect("encoding") as &dyn ToSql, &modified],
+            )?;
+            let file_id = self.tx.last_insert_rowid();
+            Ok(file_id as u32)
         }
     }
 
