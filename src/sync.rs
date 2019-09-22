@@ -106,6 +106,7 @@ impl<'a> SyncHandler<'a> {
     }
 
     fn finish_file(&mut self, file: TempFile) -> Result<(), Error> {
+        info!("File complete: {:?}", file.destination);
         self.index.move_file(file.temp_file_id, &file.destination)?;
         file.move_to_destination()?;
         Ok(())
@@ -118,8 +119,10 @@ impl<'a> SyncHandler<'a> {
         modified: chrono::DateTime<chrono::Utc>,
     ) -> Result<(), Error>
     {
-        // If we have the last reference to that TempFile, move it
-        if let Some((_, file)) = self.current_file.take() {
+        if let Some((size, file)) = self.current_file.take() {
+            debug!("File {:?} will be {} bytes", file.borrow().destination, size);
+
+            // If we have the last reference to that TempFile, move it
             if let Ok(file) = Rc::try_unwrap(file) {
                 self.finish_file(file.into_inner())?;
             }
@@ -147,6 +150,7 @@ impl<'a> SyncHandler<'a> {
 
         // If file existed, index; it might have content from aborted download
         if file_exists {
+            info!("Indexing previous part file {:?}", temp_path);
             self.index.index_file(&temp_path)?;
         }
 
@@ -172,13 +176,19 @@ impl<'a> SyncHandler<'a> {
             .as_mut()
             .ok_or(Error::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                "Got a block before a file",
+                "Got a block before any file",
             )))?;
+
+        info!(
+            "Next block: {} for {:?} offset={}",
+            hash, file.borrow().destination, *offset,
+        );
 
         // We need to write this block to the current file
         match self.index.get_block(hash)? {
             // We know where to get it, copy it from there
             Some((path, read_offset)) => {
+                info!("Getting block from {:?} offset={}", path, read_offset);
                 let block = read_block(&path, read_offset)?;
                 write_block(&mut file.borrow_mut().file, *offset, &block)?;
                 // TODO: Update temp file in index
@@ -190,11 +200,13 @@ impl<'a> SyncHandler<'a> {
                     Entry::Occupied(ref mut destinations) => {
                         // Add this to the list of where to write the block
                         destinations.get_mut().push((file.clone(), *offset));
+                        info!("Block has already been requested");
                     }
                     Entry::Vacant(v) => {
                         // Request it
                         v.insert(vec![(file.clone(), *offset)]);
                         self.blocks_to_request.push_back(hash.clone());
+                        info!("Requesting block");
                     }
                 }
             }
@@ -219,7 +231,12 @@ impl<'a> SyncHandler<'a> {
     {
         // Write the block to the destinations waiting for it
         if let Some(destinations) = self.waiting_blocks.remove(hash) {
+            info!("Got block {}", hash);
             for (file, offset) in destinations.into_iter() {
+                info!(
+                    "Writing block to {:?} offset={}",
+                    file.borrow().destination, offset,
+                );
                 write_block(&mut file.borrow_mut().file, offset, block)?;
 
                 // TODO: Update temp file in index
