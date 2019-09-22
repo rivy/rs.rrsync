@@ -24,14 +24,16 @@
 //! The handler will request blocks that are missing from the destination,
 //! which are fed in as they are received.
 //!
-//! `SyncHandler` is the low-level handler, allowing you to feed file names and
-//! blocks that you deserialize yourself, and requesting blocks as hashes.
+//! [`SyncHandler`](struct.SyncHandler.html) is the low-level handler, allowing
+//! you to feed file names and blocks that you deserialize yourself, and
+//! requesting blocks as hashes.
 //!
-//! `SyncStream` takes in a combined index/blocks stream and writes a stream of
-//! serialized block requests to a buffer. It is used by the SSH mode which
-//! uses the remote command's stdin/stdout for communication. It is *not* used
-//! by the HTTP download code, which downloads the new index as a SQLite
-//! database and requests blocks in separate HTTP requests.
+//! [`SyncStream`](struct.SyncStream.html) takes in a combined index/blocks
+//! stream and writes a stream of serialized block requests to a buffer. It is
+//! used by the SSH mode which uses the remote command's stdin/stdout for
+//! communication. It is *not* used by the HTTP download code, which downloads
+//! the new index as a SQLite database and requests blocks in separate HTTP
+//! requests.
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -41,6 +43,10 @@ use std::path::{Path, PathBuf};
 use crate::{Error, HashDigest};
 use crate::index::{Index, IndexTransaction};
 
+/// Low-level handler, allowing you to feed file names and blocks
+///
+/// You have to deserialize those yourself, and request blocks through a
+/// mechanism of your choice.
 pub struct SyncHandler<'a> {
     index: IndexTransaction<'a>,
     current_file: Option<(PathBuf, u32, File)>,
@@ -111,6 +117,10 @@ impl<'a> SyncHandler<'a> {
     }
 }
 
+/// Handler for the combined index/blocks stream
+///
+/// This handles deserializing the index and block requests from a combined
+/// stream, and serializes block requests as well.
 pub struct SyncStream<'a> {
     handler: SyncHandler<'a>,
     buffer: Vec<u8>,

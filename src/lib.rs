@@ -15,14 +15,13 @@ extern crate sha1;
 #[cfg(test)] extern crate tempfile;
 
 mod index;
-mod sync;
+pub mod sync;
 
 use rusqlite::types::{ToSql, ToSqlOutput};
 use std::fmt;
 use std::io::Write;
 
 pub use index::{Index, IndexTransaction};
-pub use sync::{SyncHandler, SyncStream};
 
 /// General error type for this library
 #[derive(Debug)]
