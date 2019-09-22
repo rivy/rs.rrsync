@@ -48,6 +48,19 @@ use std::rc::Rc;
 use crate::{Error, HashDigest};
 use crate::index::{MAX_BLOCK_SIZE, ZPAQ_BITS, Index, IndexTransaction};
 
+struct TempFile {
+    file: File,
+    temp_file_id: u32,
+    temp_path: PathBuf,
+    destination: PathBuf,
+}
+
+impl TempFile {
+    fn move_to_destination(self) -> Result<(), std::io::Error> {
+        std::fs::rename(self.temp_path, self.destination)
+    }
+}
+
 fn read_block(path: &Path, offset: usize) -> Result<Vec<u8>, Error> {
     let mut file = File::open(path)?;
     file.seek(SeekFrom::Start(offset as u64))?;
@@ -64,6 +77,7 @@ fn write_block(
     block: &[u8],
 ) -> Result<(), Error>
 {
+    // FIXME: Can you seek past the end?
     file.seek(SeekFrom::Start(offset as u64))?;
     file.write_all(block)?;
     Ok(())
@@ -75,8 +89,8 @@ fn write_block(
 /// mechanism of your choice.
 pub struct SyncHandler<'a> {
     index: IndexTransaction<'a>,
-    current_file: Option<(PathBuf, u32, usize, Rc<RefCell<File>>)>,
-    waiting_blocks: HashMap<HashDigest, Vec<(Rc<RefCell<File>>, usize)>>,
+    current_file: Option<(usize, Rc<RefCell<TempFile>>)>,
+    waiting_blocks: HashMap<HashDigest, Vec<(Rc<RefCell<TempFile>>, usize)>>,
     blocks_to_request: VecDeque<HashDigest>,
 }
 
@@ -91,6 +105,12 @@ impl<'a> SyncHandler<'a> {
         }
     }
 
+    fn finish_file(&mut self, file: TempFile) -> Result<(), Error> {
+        self.index.move_file(file.temp_file_id, &file.destination)?;
+        file.move_to_destination()?;
+        Ok(())
+    }
+
     /// Start on a new file
     pub fn new_file(
         &mut self,
@@ -98,10 +118,15 @@ impl<'a> SyncHandler<'a> {
         modified: chrono::DateTime<chrono::Utc>,
     ) -> Result<(), Error>
     {
-        // TODO: When does current file get closed and renamed?
+        // If we have the last reference to that TempFile, move it
+        if let Some((_, file)) = self.current_file.take() {
+            if let Ok(file) = Rc::try_unwrap(file) {
+                self.finish_file(file.into_inner())?;
+            }
+        }
 
         // Make temp file path, which will be swapped at the end
-        let temp_file_name = {
+        let temp_path = {
             let mut base_name = path.file_name()
                 .ok_or(Error::Io(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
@@ -113,20 +138,26 @@ impl<'a> SyncHandler<'a> {
         };
 
         // Open it, but check if it existed
-        let file_exists = temp_file_name.is_file();
+        let file_exists = temp_path.is_file();
         let file = OpenOptions::new().read(true).write(true).create(true)
-            .open(&temp_file_name)?;
+            .open(&temp_path)?;
 
         // Create temp file entry in the database
         let file_id = self.index.add_file_overwrite(path, modified)?;
 
         // If file existed, index; it might have content from aborted download
         if file_exists {
-            self.index.index_file(&temp_file_name)?;
+            self.index.index_file(&temp_path)?;
         }
 
+        let file = TempFile {
+            file,
+            temp_file_id: file_id,
+            temp_path,
+            destination: path.to_owned(),
+        };
         let file = Rc::new(RefCell::new(file));
-        self.current_file = Some((path.to_owned(), file_id, 0, file));
+        self.current_file = Some((0, file));
         Ok(())
     }
 
@@ -137,7 +168,7 @@ impl<'a> SyncHandler<'a> {
         size: usize,
     ) -> Result<(), Error>
     {
-        let &mut (_, _, ref mut offset, ref mut file) = &mut self.current_file
+        let &mut (ref mut offset, ref mut file) = &mut self.current_file
             .as_mut()
             .ok_or(Error::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -149,7 +180,7 @@ impl<'a> SyncHandler<'a> {
             // We know where to get it, copy it from there
             Some((path, read_offset)) => {
                 let block = read_block(&path, read_offset)?;
-                write_block(&mut file.borrow_mut(), *offset, &block)?;
+                write_block(&mut file.borrow_mut().file, *offset, &block)?;
                 // TODO: Update temp file in index
             }
             // We don't have this block, we'll have to wait for it
@@ -186,8 +217,22 @@ impl<'a> SyncHandler<'a> {
         block: &[u8],
     ) -> Result<(), Error>
     {
-        // TODO: Write it to files waiting for it, update temp file in index
-        unimplemented!()
+        // Write the block to the destinations waiting for it
+        if let Some(destinations) = self.waiting_blocks.remove(hash) {
+            for (file, offset) in destinations.into_iter() {
+                write_block(&mut file.borrow_mut().file, offset, block)?;
+
+                // TODO: Update temp file in index
+
+                // If we have the last reference to that TempFile, move it
+                if let Ok(file) = Rc::try_unwrap(file) {
+                    self.finish_file(file.into_inner())?;
+                }
+            }
+        } else {
+            warn!("Got block we didn't need: {}", hash);
+        }
+        Ok(())
     }
 
     /// Ask which blocks to get next

@@ -238,6 +238,43 @@ impl<'a> IndexTransaction<'a> {
         Ok(())
     }
 
+    /// Move a file, possibly over another
+    pub fn move_file(
+        &mut self,
+        file_id: u32,
+        destination: &Path,
+    ) -> Result<(), Error>
+    {
+        let destination = destination.to_str().expect("encoding");
+
+        // Delete old file
+        self.tx.execute(
+            "
+            DELETE FROM blocks WHERE file_id = (
+                SELECT file_id FROM files
+                WHERE name = ?
+            );
+            ",
+            &[destination],
+        )?;
+        self.tx.execute(
+            "
+            DELETE FROM files WHERE name = ?;
+            ",
+            &[destination],
+        )?;
+
+        // Move new file
+        self.tx.execute(
+            "
+            UPDATE files SET name = ?
+            WHERE file_id = ?;
+            ",
+            &[&destination as &dyn ToSql, &file_id],
+        )?;
+        Ok(())
+    }
+
     /// Get a list of all the files in the index
     pub fn list_files(&self) -> Result<Vec<(u32, PathBuf)>, Error> {
         let mut stmt = self.tx.prepare(
