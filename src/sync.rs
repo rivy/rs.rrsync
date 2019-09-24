@@ -303,13 +303,47 @@ impl<'a> SyncStream<'a> {
     }
 
     /// Feed bytes from the combined input
-    pub fn update(
+    pub fn update<W: Write>(
         &mut self,
         bytes_in: &[u8],
-        bytes_out: &mut [u8],
+        bytes_out: W,
     ) -> Result<usize, Error>
     {
         // TODO: Deserialize/serialize
+        unimplemented!()
+    }
+}
+
+pub struct SyncStreamSource {
+    index: Index,
+}
+
+impl SyncStreamSource {
+    /// Create a sender from the source index
+    pub fn new(index: Index) -> SyncStreamSource {
+        SyncStreamSource {
+            index,
+        }
+    }
+
+    /// Send bytes from the index
+    pub fn send_index<W: Write>(
+        &mut self,
+        bytes_out: W,
+    ) -> Result<usize, Error>
+    {
+        // TODO: Serialize
+        unimplemented!()
+    }
+
+    /// Send a block
+    pub fn send_block<W: Write>(
+        &mut self,
+        hash: &HashDigest,
+        bytes_out: W,
+    ) -> Result<usize, Error>
+    {
+        // TODO: Serialize
         unimplemented!()
     }
 }
