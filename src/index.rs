@@ -315,6 +315,28 @@ impl<'a> IndexTransaction<'a> {
         Ok(())
     }
 
+    /// Add a block, discarding overlapping blocks
+    pub(crate) fn replace_block(
+        &mut self,
+        hash: &HashDigest,
+        file_id: u32,
+        offset: usize,
+        size: usize,
+    ) -> Result<(), Error>
+    {
+        self.tx.execute(
+            "DELETE FROM blocks
+            WHERE file_id = ? AND offset + size > ? AND offset < ?;
+            ",
+            &[
+                &file_id as &dyn ToSql,
+                &(offset as i64),
+                &((offset + size) as i64),
+            ],
+        )?;
+        self.add_block(hash, file_id, offset)
+    }
+
     /// Try to find a block in the indexed files
     pub fn get_block(
         &self,

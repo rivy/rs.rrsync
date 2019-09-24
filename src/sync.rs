@@ -191,7 +191,12 @@ impl<'a> SyncHandler<'a> {
                 info!("Getting block from {:?} offset={}", path, read_offset);
                 let block = read_block(&path, read_offset)?;
                 write_block(&mut file.borrow_mut().file, *offset, &block)?;
-                // TODO: Update temp file in index
+                self.index.replace_block(
+                    &hash,
+                    file.borrow().temp_file_id,
+                    *offset,
+                    block.len(),
+                )?;
             }
             // We don't have this block, we'll have to wait for it
             None => {
@@ -238,8 +243,12 @@ impl<'a> SyncHandler<'a> {
                     file.borrow().destination, offset,
                 );
                 write_block(&mut file.borrow_mut().file, offset, block)?;
-
-                // TODO: Update temp file in index
+                self.index.replace_block(
+                    &hash,
+                    file.borrow().temp_file_id,
+                    offset,
+                    block.len(),
+                )?;
 
                 // If we have the last reference to that TempFile, move it
                 if let Ok(file) = Rc::try_unwrap(file) {
