@@ -8,6 +8,7 @@ use std::env;
 use std::path::Path;
 
 use rssync::{Error, Index, IndexTransaction};
+use rssync::locations::Location;
 
 /// Command-line entrypoint
 fn main() {
@@ -99,11 +100,47 @@ fn main() {
         Some("sync") => {
             let s_matches = matches.subcommand_matches("index").unwrap();
             let source = s_matches.value_of_os("source").unwrap();
-            let destination = s_matches.value_of_os("destination").unwrap();
+            let dest = s_matches.value_of_os("destination").unwrap();
 
-            // TODO
+            let source = match source.to_str().and_then(Location::parse) {
+                Some(s) => s,
+                None => {
+                    eprintln!("Invalid source");
+                    std::process::exit(2);
+                }
+            };
+            let dest = match dest.to_str().and_then(Location::parse) {
+                Some(s) => s,
+                None => {
+                    eprintln!("Invalid destination");
+                    std::process::exit(2);
+                }
+            };
 
-            Ok(())
+            match (source, dest) {
+                (Location::Local(_), Location::Local(_)) => unimplemented!(),
+                (Location::Local(_), Location::Ssh { .. }) => unimplemented!(),
+                (Location::Ssh { .. }, Location::Local(_)) => unimplemented!(),
+                (Location::Http(_), Location::Local(_)) => unimplemented!(),
+                // Unsupported variants
+                (Location::Http(_), _) => {
+                    eprintln!(
+                        "HTTP download is only supported to local files"
+                    );
+                    std::process::exit(2);
+                }
+                (_, Location::Http(_)) => {
+                    eprintln!("Cannot upload to HTTP");
+                    std::process::exit(2);
+                }
+                (Location::Ssh { .. }, Location::Ssh { .. }) => {
+                    // FIXME: Could we support this?
+                    eprintln!(
+                        "Direct transfer between remote hosts is not supported"
+                    );
+                    std::process::exit(2);
+                }
+            }
         }
         _ => {
             cli.print_help().expect("Can't print help");
