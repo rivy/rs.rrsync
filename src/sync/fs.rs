@@ -1,52 +1,16 @@
-//! This module contains the transfer protocol handler.
-//!
-//! The general architecture is as follows:
-//!
-//! ```plain
-//!                          +---------+
-//!                          |         |  old index
-//! +--------+   new index   | handler | <----------+
-//! |        | +-----------> |         |
-//! | sender |               | (recv)  |
-//! |        |               |         |
-//! |        | request block |         |
-//! |        | <-----------+ |         |
-//! |        |               |         |
-//! |        |  send block   |         | update files
-//! +--------+ +-----------> |         | +---------->
-//!                          +---------+
-//! ```
-//!
-//! First the old index is computed and loaded in full.
-//!
-//! Then, the new index is fed in either all at once or in a streaming fashion.
-//!
-//! The handler will request blocks that are missing from the destination,
-//! which are fed in as they are received.
-//!
-//! [`SyncHandler`](struct.SyncHandler.html) is the low-level handler, allowing
-//! you to feed file names and blocks that you deserialize yourself, and
-//! requesting blocks as hashes.
-//!
-//! [`SyncStream`](struct.SyncStream.html) takes in a combined index/blocks
-//! stream and writes a stream of serialized block requests to a buffer. It is
-//! used by the SSH mode which uses the remote command's stdin/stdout for
-//! communication. It is *not* used by the HTTP download code, which downloads
-//! the new index as a SQLite database and requests blocks in separate HTTP
-//! requests.
-
 use cdchunking::{Chunker, ZPAQ};
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::collections::hash_map::{Entry, HashMap};
 use std::io::{Seek, SeekFrom, Write};
 use std::fs::{OpenOptions, File};
-use std::ops::{Deref, DerefMut};
+use std::ops::Not;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use crate::{Error, HashDigest};
-use crate::index::{MAX_BLOCK_SIZE, ZPAQ_BITS, Index, IndexTransaction};
+use crate::index::{MAX_BLOCK_SIZE, ZPAQ_BITS, IndexTransaction};
+use crate::sync::{IndexEvent, Sink, Source};
 
 struct TempFile {
     file: File,
@@ -83,21 +47,18 @@ fn write_block(
     Ok(())
 }
 
-/// Low-level handler, allowing you to feed file names and blocks
-///
-/// You have to deserialize those yourself, and request blocks through a
-/// mechanism of your choice.
-pub struct SyncHandler<'a> {
+/// Local filesystem sink, e.g. `Sink` that writes files.
+pub struct FsSink<'a> {
     index: IndexTransaction<'a>,
     current_file: Option<(usize, Rc<RefCell<TempFile>>)>,
     waiting_blocks: HashMap<HashDigest, Vec<(Rc<RefCell<TempFile>>, usize)>>,
     blocks_to_request: VecDeque<HashDigest>,
 }
 
-impl<'a> SyncHandler<'a> {
-    /// Create a handler from the local (destination) index
-    pub fn new(index: IndexTransaction<'a>) -> SyncHandler<'a> {
-        SyncHandler {
+impl<'a> FsSink<'a> {
+    /// Create a sink from the (destination) index
+    pub fn new(index: IndexTransaction<'a>) -> FsSink<'a> {
+        FsSink {
             index,
             current_file: None,
             waiting_blocks: HashMap::new(),
@@ -111,9 +72,10 @@ impl<'a> SyncHandler<'a> {
         file.move_to_destination()?;
         Ok(())
     }
+}
 
-    /// Start on a new file
-    pub fn new_file(
+impl<'a> Sink for FsSink<'a> {
+    fn new_file(
         &mut self,
         path: &Path,
         modified: chrono::DateTime<chrono::Utc>,
@@ -165,8 +127,7 @@ impl<'a> SyncHandler<'a> {
         Ok(())
     }
 
-    /// Feed entry from the new index
-    pub fn new_block(
+    fn new_block(
         &mut self,
         hash: &HashDigest,
         size: usize,
@@ -220,15 +181,7 @@ impl<'a> SyncHandler<'a> {
         Ok(())
     }
 
-    /// Feed a whole new index
-    pub fn new_index(&mut self, new_index: &Index) -> Result<(), Error> {
-        // TODO: Go over index and feed it to new_file()/new_block()
-        // Maybe can be more efficient? Don't know
-        unimplemented!()
-    }
-
-    /// Feed a block that was requested
-    pub fn feed_block(
+    fn feed_block(
         &mut self,
         hash: &HashDigest,
         block: &[u8],
@@ -261,95 +214,42 @@ impl<'a> SyncHandler<'a> {
         Ok(())
     }
 
-    /// Ask which blocks to get next
-    pub fn next_requested_block(
+    fn next_requested_block(
         &mut self,
     ) -> Result<Option<HashDigest>, Error>
     {
         Ok(self.blocks_to_request.pop_front())
     }
-}
 
-/// Handler for the combined index/blocks stream
-///
-/// This handles deserializing the index and block requests from a combined
-/// stream, and serializes block requests as well.
-pub struct SyncStream<'a> {
-    handler: SyncHandler<'a>,
-    buffer: Vec<u8>,
-}
-
-impl<'a> Deref for SyncStream<'a> {
-    type Target = SyncHandler<'a>;
-
-    fn deref(&self) -> &SyncHandler<'a> {
-        &self.handler
+    fn is_missing_blocks(&self) -> Result<bool, Error> {
+        Ok(self.waiting_blocks.is_empty().not())
     }
 }
 
-impl<'a> DerefMut for SyncStream<'a> {
-    fn deref_mut(&mut self) -> &mut SyncHandler<'a> {
-        &mut self.handler
-    }
-}
-
-impl<'a> SyncStream<'a> {
-    /// Create a handler from the local (destination) index
-    pub fn new(index: IndexTransaction<'a>) -> SyncStream<'a> {
-        SyncStream {
-            handler: SyncHandler::new(index),
-            buffer: Vec::new(),
-        }
-    }
-
-    /// Feed bytes from the combined input
-    pub fn update<W: Write>(
-        &mut self,
-        bytes_in: &[u8],
-        bytes_out: W,
-    ) -> Result<usize, Error>
-    {
-        // TODO: Deserialize/serialize
-        unimplemented!()
-    }
-}
-
-pub struct SyncStreamSource<'a> {
+/// Local filesystem source, e.g. `Source` that reads files
+pub struct FsSource<'a> {
     index: IndexTransaction<'a>,
-    path: &'a Path,
 }
 
-impl SyncStreamSource {
-    /// Create a sender from the source index
-    pub fn new<'a>(
-        index: IndexTransaction<'a>,
-        path: &'a Path,
-    ) -> SyncStreamSource<'a>
-    {
-        SyncStreamSource {
+impl<'a> FsSource<'a> {
+    /// Create a source from the (source) index
+    pub fn new(index: IndexTransaction<'a>) -> FsSource<'a> {
+        FsSource {
             index,
-            path,
         }
     }
+}
 
-    /// Send bytes from the index
-    pub fn send_index<W: Write>(
-        &mut self,
-        bytes_out: W,
-    ) -> Result<usize, Error>
-    {
-        // TODO: Serialize
+impl<'a> Source for FsSource<'a> {
+    fn next_from_index(&mut self) -> Result<Option<IndexEvent>, Error> {
         unimplemented!()
     }
 
-    /// Send a block
-    pub fn send_block<W: Write>(
-        &mut self,
-        hash: &HashDigest,
-        bytes_out: W,
-    ) -> Result<usize, Error>
-    {
-        // TODO: Serialize
+    fn request_block(&mut self, hash: &HashDigest) -> Result<(), Error> {
+        unimplemented!()
+    }
+
+    fn get_next_block(&mut self) -> Result<Option<(HashDigest, Vec<u8>)>, Error> {
         unimplemented!()
     }
 }
