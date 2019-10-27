@@ -52,6 +52,28 @@ fn main() {
                         .required(true)
                         .takes_value(true),
                 )
+        )
+        .subcommand(
+            SubCommand::with_name("remote-recv")
+                .about("Internal - process started on the remote to receive \
+                        files. Expects stdin and stdout to be connected to the \
+                        sender process")
+                .arg(
+                    Arg::with_name("destination")
+                        .required(true)
+                        .takes_value(true),
+                )
+        )
+        .subcommand(
+            SubCommand::with_name("remote-send")
+                .about("Internal - process started on the remote to send \
+                        files. Expects stdin and stdout to be connected to \
+                        the receiver process")
+                .arg(
+                    Arg::with_name("source")
+                        .required(true)
+                        .takes_value(true),
+                )
         );
 
     let mut cli = cli;
@@ -118,7 +140,12 @@ fn main() {
             };
 
             match (source, dest) {
-                (Location::Local(_), Location::Local(_)) => unimplemented!(),
+                (Location::Local(source), Location::Local(dest)) => {
+                    let source_idx = Path::new(source).parent().unwrap();
+                    let source_idx = source_idx.to_path_buf();
+                    let sender = LocalSender::new(source, source_idx);
+                    let receiver = LocalReceiver::new(dest);
+                }
                 (Location::Local(_), Location::Ssh { .. }) => unimplemented!(),
                 (Location::Ssh { .. }, Location::Local(_)) => unimplemented!(),
                 (Location::Http(_), Location::Local(_)) => unimplemented!(),

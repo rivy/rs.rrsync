@@ -314,15 +314,21 @@ impl<'a> SyncStream<'a> {
     }
 }
 
-pub struct SyncStreamSource {
-    index: Index,
+pub struct SyncStreamSource<'a> {
+    index: IndexTransaction<'a>,
+    path: &'a Path,
 }
 
 impl SyncStreamSource {
     /// Create a sender from the source index
-    pub fn new(index: Index) -> SyncStreamSource {
+    pub fn new<'a>(
+        index: IndexTransaction<'a>,
+        path: &'a Path,
+    ) -> SyncStreamSource<'a>
+    {
         SyncStreamSource {
             index,
+            path,
         }
     }
 
