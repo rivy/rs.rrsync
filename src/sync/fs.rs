@@ -74,6 +74,18 @@ impl<'a> FsSink<'a> {
         file.move_to_destination()?;
         Ok(())
     }
+
+    fn end_current_file(&mut self) -> Result<(), Error> {
+        if let Some((size, file)) = self.current_file.take() {
+            debug!("File {:?} will be {} bytes", file.borrow().destination, size);
+
+            // If we have the last reference to that TempFile, move it
+            if let Ok(file) = Rc::try_unwrap(file) {
+                self.finish_file(file.into_inner())?;
+            }
+        }
+        Ok(())
+    }
 }
 
 impl<'a> Sink for FsSink<'a> {
@@ -83,14 +95,7 @@ impl<'a> Sink for FsSink<'a> {
         modified: chrono::DateTime<chrono::Utc>,
     ) -> Result<(), Error>
     {
-        if let Some((size, file)) = self.current_file.take() {
-            debug!("File {:?} will be {} bytes", file.borrow().destination, size);
-
-            // If we have the last reference to that TempFile, move it
-            if let Ok(file) = Rc::try_unwrap(file) {
-                self.finish_file(file.into_inner())?;
-            }
-        }
+        self.end_current_file()?;
 
         // Make temp file path, which will be swapped at the end
         let temp_path = {
@@ -184,6 +189,10 @@ impl<'a> Sink for FsSink<'a> {
         }
         *offset += size;
         Ok(())
+    }
+
+    fn end_files(&mut self) -> Result<(), Error> {
+        self.end_current_file()
     }
 
     fn feed_block(

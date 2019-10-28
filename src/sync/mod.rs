@@ -40,6 +40,9 @@ pub trait Sink {
     /// Feed entry from the new index
     fn new_block(&mut self, hash: &HashDigest, size: usize) -> Result<(), Error>;
 
+    /// End of files
+    fn end_files(&mut self) -> Result<(), Error>;
+
     /// Feed a block that was requested
     fn feed_block(&mut self, hash: &HashDigest, block: &[u8]) -> Result<(), Error>;
 
@@ -101,6 +104,10 @@ impl<R: Sink + ?Sized> Sink for Box<R> {
         (**self).new_block(hash, size)
     }
 
+    fn end_files(&mut self) -> Result<(), Error> {
+        (**self).end_files()
+    }
+
     fn feed_block(&mut self, hash: &HashDigest, block: &[u8]) -> Result<(), Error> {
         (**self).feed_block(hash, block)
     }
@@ -154,6 +161,7 @@ pub fn do_sync<S: Source, R: Sink>(mut source: S, mut sink: R) -> Result<(), Err
                     sink.new_block(&hash, size)?
                 }
                 IndexEvent::End => {
+                    sink.end_files()?;
                     instructions = false;
                 }
             }
