@@ -1,21 +1,21 @@
 extern crate clap;
 #[macro_use] extern crate log;
 extern crate env_logger;
-extern crate rssync;
+extern crate rrsync;
 
 use clap::{App, Arg, SubCommand};
 use std::env;
 use std::path::Path;
 
-use rssync::{Error, Index, IndexTransaction};
-use rssync::locations::Location;
-use rssync::sync::do_sync;
+use rrsync::{Error, Index, IndexTransaction};
+use rrsync::locations::Location;
+use rrsync::sync::do_sync;
 
 /// Command-line entrypoint
 fn main() {
     // Parse command line
-    let cli = App::new("rssync")
-        .bin_name("rssync")
+    let cli = App::new("rrsync")
+        .bin_name("rrsync")
         .version(env!("CARGO_PKG_VERSION"))
         .author(env!("CARGO_PKG_AUTHORS"))
         .about(env!("CARGO_PKG_DESCRIPTION"))
@@ -37,7 +37,7 @@ fn main() {
                     Arg::with_name("index-file")
                         .short("x")
                         .takes_value(true)
-                        .default_value("rssync.idx"),
+                        .default_value("rrsync.idx"),
                 ),
         )
         .subcommand(
@@ -96,10 +96,10 @@ fn main() {
         };
         let mut logger_builder = env_logger::builder();
         logger_builder.filter(None, level);
-        if let Ok(val) = env::var("RSSYNC_LOG") {
+        if let Ok(val) = env::var("RRSYNC_LOG") {
             logger_builder.parse_filters(&val);
         }
-        if let Ok(val) = env::var("RSSYNC_LOG_STYLE") {
+        if let Ok(val) = env::var("RRSYNC_LOG_STYLE") {
             logger_builder.parse_write_style(&val);
         }
         logger_builder.init();
@@ -140,14 +140,14 @@ fn main() {
                 }
             };
 
-            let source_obj: Box<dyn rssync::sync::Source> = match source.open_source() {
+            let source_obj: Box<dyn rrsync::sync::Source> = match source.open_source() {
                 Ok(o) => o,
                 Err(e) => {
                     eprintln!("Failed to open source: {}", e);
                     std::process::exit(1);
                 }
             };
-            let sink_obj: Box<dyn rssync::sync::Sink> = match dest.open_sink() {
+            let sink_obj: Box<dyn rrsync::sync::Sink> = match dest.open_sink() {
                 Ok(o) => o,
                 Err(e) => {
                     eprintln!("Failed to open destination: {}", e);
