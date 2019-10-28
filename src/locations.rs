@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use crate::Error;
-use crate::sync::{Sink, Source};
-use crate::sync::fs::{FsSink, FsSource};
+use crate::sync::{SinkWrapper, SourceWrapper};
+use crate::sync::fs::{FsSinkWrapper, FsSourceWrapper};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Location {
@@ -59,20 +59,28 @@ impl Location {
         }
     }
 
-    pub fn open_sink(&self) -> Result<Box<dyn Sink>, Error> {
-        match self {
-            Location::Local(path) => unimplemented!(),
-            Location::Ssh { user, host, path } => unimplemented!(),
-            Location::Http(url) => unimplemented!(),
-        }
+    pub fn open_sink(&self) -> Result<Box<dyn SinkWrapper>, Error> {
+        let w = match self {
+            Location::Local(path) => Box::new(FsSinkWrapper::new(path)),
+            Location::Ssh { user, host, path } => unimplemented!(), // TODO: SSH
+            Location::Http(url) => {
+                // Shouldn't happen, caught in main.rs
+                return Err(Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "Can't write to HTTP location",
+                )));
+            }
+        };
+        Ok(w)
     }
 
-    pub fn open_source(&self) -> Result<Box<dyn Source>, Error> {
-        match self {
-            Location::Local(path) => unimplemented!(),
-            Location::Ssh { user, host, path } => unimplemented!(),
-            Location::Http(url) => unimplemented!(),
-        }
+    pub fn open_source(&self) -> Result<Box<dyn SourceWrapper>, Error> {
+        let w = match self {
+            Location::Local(path) => Box::new(FsSourceWrapper::new(path)),
+            Location::Ssh { user, host, path } => unimplemented!(), // TODO: SSH
+            Location::Http(url) => unimplemented!(), // TODO: HTTP
+        };
+        Ok(w)
     }
 }
 

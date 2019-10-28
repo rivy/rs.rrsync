@@ -135,6 +135,34 @@ impl<S: Source + ?Sized> Source for Box<S> {
     }
 }
 
+/// Wrapper for ownership reasons
+///
+/// This only exists to hold the rusqlite `Connection`, which has to outlive
+/// the transaction used by the `Sink`.
+pub trait SinkWrapper {
+    fn open<'a>(&'a mut self) -> Result<Box<dyn Sink + 'a>, Error>;
+}
+
+impl<RW: SinkWrapper + ?Sized> SinkWrapper for Box<RW> {
+    fn open<'a>(&'a mut self) -> Result<Box<dyn Sink + 'a>, Error> {
+        (**self).open()
+    }
+}
+
+/// Wrapper for ownership reasons
+///
+/// This only exists to hold the rusqlite `Connection`, which has to outlive
+/// the transaction used by the `Source`.
+pub trait SourceWrapper {
+    fn open<'a>(&'a mut self) -> Result<Box<dyn Source + 'a>, Error>;
+}
+
+impl<SW: SourceWrapper + ?Sized> SourceWrapper for Box<SW> {
+    fn open<'a>(&'a mut self) -> Result<Box<dyn Source + 'a>, Error> {
+        (**self).open()
+    }
+}
+
 pub fn do_sync<S: Source, R: Sink>(mut source: S, mut sink: R) -> Result<(), Error> {
     let mut instructions = true;
     while instructions || sink.is_missing_blocks()? {

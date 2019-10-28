@@ -121,7 +121,7 @@ fn main() {
             Ok(())
         }(),
         Some("sync") => {
-            let s_matches = matches.subcommand_matches("index").unwrap();
+            let s_matches = matches.subcommand_matches("sync").unwrap();
             let source = s_matches.value_of_os("source").unwrap();
             let dest = s_matches.value_of_os("destination").unwrap();
 
@@ -133,6 +133,10 @@ fn main() {
                 }
             };
             let dest = match dest.to_str().and_then(Location::parse) {
+                Some(Location::Http(_)) => {
+                    eprintln!("Can't write to HTTP destination, only read");
+                    std::process::exit(2);
+                }
                 Some(s) => s,
                 None => {
                     eprintln!("Invalid destination");
@@ -140,17 +144,31 @@ fn main() {
                 }
             };
 
-            let source_obj: Box<dyn rrsync::sync::Source> = match source.open_source() {
+            let mut source_wrapper: Box<dyn rrsync::sync::SourceWrapper> = match source.open_source() {
                 Ok(o) => o,
                 Err(e) => {
                     eprintln!("Failed to open source: {}", e);
                     std::process::exit(1);
                 }
             };
-            let sink_obj: Box<dyn rrsync::sync::Sink> = match dest.open_sink() {
+            let source_obj: Box<dyn rrsync::sync::Source> = match source_wrapper.open() {
+                Ok(o) => o,
+                Err(e) => {
+                    eprintln!("Failed to prepare source: {}", e);
+                    std::process::exit(1);
+                }
+            };
+            let mut sink_wrapper: Box<dyn rrsync::sync::SinkWrapper> = match dest.open_sink() {
                 Ok(o) => o,
                 Err(e) => {
                     eprintln!("Failed to open destination: {}", e);
+                    std::process::exit(1);
+                }
+            };
+            let sink_obj: Box<dyn rrsync::sync::Sink> = match sink_wrapper.open() {
+                Ok(o) => o,
+                Err(e) => {
+                    eprintln!("Failed to prepare destination: {}", e);
                     std::process::exit(1);
                 }
             };

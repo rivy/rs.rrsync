@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use crate::{Error, HashDigest};
-use crate::index::{MAX_BLOCK_SIZE, ZPAQ_BITS, IndexTransaction};
-use crate::sync::{IndexEvent, Sink, Source};
+use crate::index::{MAX_BLOCK_SIZE, ZPAQ_BITS, Index, IndexTransaction};
+use crate::sync::{IndexEvent, Sink, SinkWrapper, Source, SourceWrapper};
 
 struct TempFile {
     file: File,
@@ -50,7 +50,7 @@ fn write_block(
 /// Local filesystem sink, e.g. `Sink` that writes files.
 pub struct FsSink<'a> {
     index: IndexTransaction<'a>,
-    root_dir: PathBuf,
+    root_dir: &'a Path,
     current_file: Option<(usize, Rc<RefCell<TempFile>>)>,
     waiting_blocks: HashMap<HashDigest, Vec<(Rc<RefCell<TempFile>>, usize)>>,
     blocks_to_request: VecDeque<HashDigest>,
@@ -58,7 +58,7 @@ pub struct FsSink<'a> {
 
 impl<'a> FsSink<'a> {
     /// Create a sink from the (destination) index
-    pub fn new(index: IndexTransaction<'a>, root_dir: PathBuf) -> FsSink<'a> {
+    pub fn new(index: IndexTransaction<'a>, root_dir: &'a Path) -> FsSink<'a> {
         FsSink {
             index,
             root_dir,
@@ -243,7 +243,7 @@ impl<'a> Sink for FsSink<'a> {
 /// Local filesystem source, e.g. `Source` that reads files
 pub struct FsSource<'a> {
     index: IndexTransaction<'a>,
-    root_dir: PathBuf,
+    root_dir: &'a Path,
     files: VecDeque<(u32, PathBuf, chrono::DateTime<chrono::Utc>)>,
     blocks: VecDeque<(HashDigest, usize)>,
     requested_blocks: VecDeque<HashDigest>,
@@ -251,7 +251,7 @@ pub struct FsSource<'a> {
 
 impl<'a> FsSource<'a> {
     /// Create a source from the (source) index
-    pub fn new(index: IndexTransaction<'a>, root_dir: PathBuf) -> Result<FsSource<'a>, Error> {
+    pub fn new(index: IndexTransaction<'a>, root_dir: &'a Path) -> Result<FsSource<'a>, Error> {
         let files = index.list_files()?.into_iter().collect();
         Ok(FsSource {
             index,
@@ -306,5 +306,41 @@ impl<'a> Source for FsSource<'a> {
             }
             None => Ok(None),
         }
+    }
+}
+
+pub struct FsSinkWrapper {
+    index: Index,
+    path: PathBuf,
+}
+
+impl FsSinkWrapper {
+    pub fn new(path: &Path) -> FsSinkWrapper {
+        // TODO: Create index
+        unimplemented!()
+    }
+}
+
+impl SinkWrapper for FsSinkWrapper {
+    fn open<'a>(&'a mut self) -> Result<Box<dyn Sink + 'a>, Error> {
+        Ok(Box::new(FsSink::new(self.index.transaction()?, &self.path)))
+    }
+}
+
+pub struct FsSourceWrapper {
+    index: Index,
+    path: PathBuf,
+}
+
+impl FsSourceWrapper {
+    pub fn new(path: &Path) -> FsSourceWrapper {
+        // TODO: Create index
+        unimplemented!()
+    }
+}
+
+impl SourceWrapper for FsSourceWrapper {
+    fn open<'a>(&'a mut self) -> Result<Box<dyn Source + 'a>, Error> {
+        Ok(Box::new(FsSource::new(self.index.transaction()?, &self.path)?))
     }
 }
