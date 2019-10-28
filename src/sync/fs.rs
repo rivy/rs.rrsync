@@ -50,6 +50,7 @@ fn write_block(
 /// Local filesystem sink, e.g. `Sink` that writes files.
 pub struct FsSink<'a> {
     index: IndexTransaction<'a>,
+    root_dir: PathBuf,
     current_file: Option<(usize, Rc<RefCell<TempFile>>)>,
     waiting_blocks: HashMap<HashDigest, Vec<(Rc<RefCell<TempFile>>, usize)>>,
     blocks_to_request: VecDeque<HashDigest>,
@@ -57,9 +58,10 @@ pub struct FsSink<'a> {
 
 impl<'a> FsSink<'a> {
     /// Create a sink from the (destination) index
-    pub fn new(index: IndexTransaction<'a>) -> FsSink<'a> {
+    pub fn new(index: IndexTransaction<'a>, root_dir: PathBuf) -> FsSink<'a> {
         FsSink {
             index,
+            root_dir,
             current_file: None,
             waiting_blocks: HashMap::new(),
             blocks_to_request: VecDeque::new(),
@@ -99,7 +101,7 @@ impl<'a> Sink for FsSink<'a> {
                 )))?
                 .to_os_string();
             base_name.push(".part");
-            path.with_file_name(base_name)
+            self.root_dir.join(path.with_file_name(base_name))
         };
 
         // Open it, but check if it existed
@@ -120,7 +122,7 @@ impl<'a> Sink for FsSink<'a> {
             file,
             temp_file_id: file_id,
             temp_path,
-            destination: path.to_owned(),
+            destination: self.root_dir.join(path),
         };
         let file = Rc::new(RefCell::new(file));
         self.current_file = Some((0, file));
@@ -150,7 +152,10 @@ impl<'a> Sink for FsSink<'a> {
             // We know where to get it, copy it from there
             Some((path, read_offset, _size)) => {
                 info!("Getting block from {:?} offset={}", path, read_offset);
-                let block = read_block(&path, read_offset)?;
+                let block = read_block(
+                    &self.root_dir.join(path),
+                    read_offset,
+                )?;
                 write_block(&mut file.borrow_mut().file, *offset, &block)?;
                 self.index.replace_block(
                     &hash,
@@ -229,6 +234,7 @@ impl<'a> Sink for FsSink<'a> {
 /// Local filesystem source, e.g. `Source` that reads files
 pub struct FsSource<'a> {
     index: IndexTransaction<'a>,
+    root_dir: PathBuf,
     files: VecDeque<(u32, PathBuf, chrono::DateTime<chrono::Utc>)>,
     blocks: VecDeque<(HashDigest, usize)>,
     requested_blocks: VecDeque<HashDigest>,
@@ -236,10 +242,11 @@ pub struct FsSource<'a> {
 
 impl<'a> FsSource<'a> {
     /// Create a source from the (source) index
-    pub fn new(index: IndexTransaction<'a>) -> Result<FsSource<'a>, Error> {
+    pub fn new(index: IndexTransaction<'a>, root_dir: PathBuf) -> Result<FsSource<'a>, Error> {
         let files = index.list_files()?.into_iter().collect();
         Ok(FsSource {
             index,
+            root_dir,
             files,
             blocks: VecDeque::new(),
             requested_blocks: VecDeque::new(),
@@ -277,7 +284,10 @@ impl<'a> Source for FsSource<'a> {
         match self.requested_blocks.pop_front() {
             Some(hash) => {
                 if let Some((path, offset, _size)) = self.index.get_block(&hash)? {
-                    Ok(Some((hash, read_block(&path, offset)?)))
+                    Ok(Some((
+                        hash,
+                        read_block(&self.root_dir.join(path), offset)?,
+                    )))
                 } else {
                     Err(Error::Io(std::io::Error::new(
                         std::io::ErrorKind::NotFound,
