@@ -279,10 +279,13 @@ impl<'a> IndexTransaction<'a> {
     }
 
     /// Get a list of all the files in the index
-    pub fn list_files(&self) -> Result<Vec<(u32, PathBuf)>, Error> {
+    pub fn list_files(
+        &self,
+    ) -> Result<Vec<(u32, PathBuf, chrono::DateTime<chrono::Utc>)>, Error>
+    {
         let mut stmt = self.tx.prepare(
             "
-            SELECT file_id, name FROM files;
+            SELECT file_id, name, modified FROM files;
             ",
         )?;
         let mut rows = stmt.query(rusqlite::NO_PARAMS)?;
@@ -291,7 +294,7 @@ impl<'a> IndexTransaction<'a> {
             match rows.next() {
                 Some(Ok(row)) => {
                     let path: String = row.get(1);
-                    results.push((row.get(0), path.into()))
+                    results.push((row.get(0), path.into(), row.get(2)))
                 }
                 Some(Err(e)) => return Err(e.into()),
                 None => break,

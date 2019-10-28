@@ -212,7 +212,7 @@ fn remove_missing_files<'a>(
     path: &Path,
 ) -> Result<(), Error>
 {
-    for (file_id, file_path) in index.list_files()? {
+    for (file_id, file_path, _modified) in index.list_files()? {
         if !path.join(&file_path).is_file() {
             info!("Removing missing file {:?}", file_path);
             index.remove_file(file_id)?;
