@@ -1,5 +1,9 @@
 use std::path::PathBuf;
 
+use crate::Error;
+use crate::sync::{Sink, Source};
+use crate::sync::fs::{FsSink, FsSource};
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Location {
     Local(PathBuf),
@@ -52,6 +56,22 @@ impl Location {
             }
 
             Some(Location::Local(s.into()))
+        }
+    }
+
+    pub fn open_sink(&self) -> Result<Box<dyn Sink>, Error> {
+        match self {
+            Location::Local(path) => unimplemented!(),
+            Location::Ssh { user, host, path } => unimplemented!(),
+            Location::Http(url) => unimplemented!(),
+        }
+    }
+
+    pub fn open_source(&self) -> Result<Box<dyn Source>, Error> {
+        match self {
+            Location::Local(path) => unimplemented!(),
+            Location::Ssh { user, host, path } => unimplemented!(),
+            Location::Http(url) => unimplemented!(),
         }
     }
 }

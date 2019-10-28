@@ -83,7 +83,7 @@ pub trait SinkExt {
     fn new_index(&mut self, new_index: &Index) -> Result<(), Error>;
 }
 
-impl<S: Sink> SinkExt for S {
+impl<R: Sink> SinkExt for R {
     /// Feed a whole new index
     fn new_index(&mut self, new_index: &Index) -> Result<(), Error> {
         // TODO: Go over index and feed it to new_file()/new_block()
@@ -92,30 +92,66 @@ impl<S: Sink> SinkExt for S {
     }
 }
 
-pub fn do_stream<S: Sink, R: Source>(mut recv: S, mut  send: R) -> Result<(), Error> {
+impl<R: Sink + ?Sized> Sink for Box<R> {
+    fn new_file(&mut self, path: &Path, modified: chrono::DateTime<chrono::Utc>) -> Result<(), Error> {
+        (**self).new_file(path, modified)
+    }
+
+    fn new_block(&mut self, hash: &HashDigest, size: usize) -> Result<(), Error> {
+        (**self).new_block(hash, size)
+    }
+
+    fn feed_block(&mut self, hash: &HashDigest, block: &[u8]) -> Result<(), Error> {
+        (**self).feed_block(hash, block)
+    }
+
+    fn next_requested_block(&mut self) -> Result<Option<HashDigest>, Error> {
+        (**self).next_requested_block()
+    }
+
+    fn is_missing_blocks(&self) -> Result<bool, Error> {
+        (**self).is_missing_blocks()
+    }
+}
+
+impl<S: Source + ?Sized> Source for Box<S> {
+    fn next_from_index(&mut self) -> Result<Option<IndexEvent>, Error> {
+        (**self).next_from_index()
+    }
+
+    fn request_block(&mut self, hash: &HashDigest) -> Result<(), Error> {
+        (**self).request_block(hash)
+    }
+
+    fn get_next_block(&mut self) -> Result<Option<(HashDigest, Vec<u8>)>, Error> {
+        (**self).get_next_block()
+    }
+}
+
+pub fn do_sync<S: Source, R: Sink>(mut source: S, mut sink: R) -> Result<(), Error> {
     let mut instructions = true;
-    while instructions || recv.is_missing_blocks()? {
+    while instructions || sink.is_missing_blocks()? {
         // Things are done in order so that bandwidth is used in a smart way
         // For example, if you block on sending block data, you will have
         // received more block requests in the next loop, and you'll only
         // transmit (sender side) or process (receiver side) index instructions
         // when there's nothing better to do
-        if let Some(hash) = recv.next_requested_block()? {
+        if let Some(hash) = sink.next_requested_block()? {
             // Block requests
-            send.request_block(&hash)?; // can block on HTTP receiver side
+            source.request_block(&hash)?; // can block on HTTP receiver side
         } else if let Some((hash, block)) =
-            send.get_next_block()? // blocks on receiver side
+            source.get_next_block()? // blocks on receiver side
         {
             // Block data
-            recv.feed_block(&hash, &block)?; // blocks on sender side
-        } else if let Some(event) = send.next_from_index()? {
+            sink.feed_block(&hash, &block)?; // blocks on sender side
+        } else if let Some(event) = source.next_from_index()? {
             // Index instructions
             match event {
                 IndexEvent::NewFile(path, modified) => {
-                    recv.new_file(&path, modified)?
+                    sink.new_file(&path, modified)?
                 }
                 IndexEvent::NewBlock(hash, size) => {
-                    recv.new_block(&hash, size)?
+                    sink.new_block(&hash, size)?
                 }
                 IndexEvent::End => {
                     instructions = false;

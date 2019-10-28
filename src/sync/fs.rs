@@ -148,7 +148,7 @@ impl<'a> Sink for FsSink<'a> {
         // We need to write this block to the current file
         match self.index.get_block(hash)? {
             // We know where to get it, copy it from there
-            Some((path, read_offset)) => {
+            Some((path, read_offset, _size)) => {
                 info!("Getting block from {:?} offset={}", path, read_offset);
                 let block = read_block(&path, read_offset)?;
                 write_block(&mut file.borrow_mut().file, *offset, &block)?;
@@ -229,27 +229,63 @@ impl<'a> Sink for FsSink<'a> {
 /// Local filesystem source, e.g. `Source` that reads files
 pub struct FsSource<'a> {
     index: IndexTransaction<'a>,
+    files: VecDeque<(u32, PathBuf, chrono::DateTime<chrono::Utc>)>,
+    blocks: VecDeque<(HashDigest, usize)>,
+    requested_blocks: VecDeque<HashDigest>,
 }
 
 impl<'a> FsSource<'a> {
     /// Create a source from the (source) index
-    pub fn new(index: IndexTransaction<'a>) -> FsSource<'a> {
-        FsSource {
+    pub fn new(index: IndexTransaction<'a>) -> Result<FsSource<'a>, Error> {
+        let files = index.list_files()?.into_iter().collect();
+        Ok(FsSource {
             index,
-        }
+            files,
+            blocks: VecDeque::new(),
+            requested_blocks: VecDeque::new(),
+        })
     }
 }
 
 impl<'a> Source for FsSource<'a> {
     fn next_from_index(&mut self) -> Result<Option<IndexEvent>, Error> {
-        unimplemented!()
+        // If there are blocks left in current file, return one
+        if let Some((hash, size)) = self.blocks.pop_front() {
+            return Ok(Some(IndexEvent::NewBlock(hash, size)));
+        }
+
+        // If there are more files left, read the next one in
+        if let Some((file_id, path, modified)) = self.files.pop_front() {
+            let blocks = self.index.list_file_blocks(file_id)?;
+            self.blocks = blocks
+                .into_iter()
+                .map(|(hash, _offset, size)| (hash, size))
+                .collect();
+            return Ok(Some(IndexEvent::NewFile(path, modified)));
+        }
+
+        // No more files
+        Ok(Some(IndexEvent::End))
     }
 
     fn request_block(&mut self, hash: &HashDigest) -> Result<(), Error> {
-        unimplemented!()
+        self.requested_blocks.push_back(hash.clone());
+        Ok(())
     }
 
     fn get_next_block(&mut self) -> Result<Option<(HashDigest, Vec<u8>)>, Error> {
-        unimplemented!()
+        match self.requested_blocks.pop_front() {
+            Some(hash) => {
+                if let Some((path, offset, _size)) = self.index.get_block(&hash)? {
+                    Ok(Some((hash, read_block(&path, offset)?)))
+                } else {
+                    Err(Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "Unknown block requested",
+                    )))
+                }
+            }
+            None => Ok(None),
+        }
     }
 }

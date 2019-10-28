@@ -9,6 +9,7 @@ use std::path::Path;
 
 use rssync::{Error, Index, IndexTransaction};
 use rssync::locations::Location;
+use rssync::sync::do_sync;
 
 /// Command-line entrypoint
 fn main() {
@@ -139,35 +140,21 @@ fn main() {
                 }
             };
 
-            match (source, dest) {
-                (Location::Local(source), Location::Local(dest)) => {
-                    let source_idx = Path::new(source).parent().unwrap();
-                    let source_idx = source_idx.to_path_buf();
-                    let sender = LocalSender::new(source, source_idx);
-                    let receiver = LocalReceiver::new(dest);
+            let source_obj: Box<dyn rssync::sync::Source> = match source.open_source() {
+                Ok(o) => o,
+                Err(e) => {
+                    eprintln!("Failed to open source: {}", e);
+                    std::process::exit(1);
                 }
-                (Location::Local(_), Location::Ssh { .. }) => unimplemented!(),
-                (Location::Ssh { .. }, Location::Local(_)) => unimplemented!(),
-                (Location::Http(_), Location::Local(_)) => unimplemented!(),
-                // Unsupported variants
-                (Location::Http(_), _) => {
-                    eprintln!(
-                        "HTTP download is only supported to local files"
-                    );
-                    std::process::exit(2);
+            };
+            let sink_obj: Box<dyn rssync::sync::Sink> = match dest.open_sink() {
+                Ok(o) => o,
+                Err(e) => {
+                    eprintln!("Failed to open destination: {}", e);
+                    std::process::exit(1);
                 }
-                (_, Location::Http(_)) => {
-                    eprintln!("Cannot upload to HTTP");
-                    std::process::exit(2);
-                }
-                (Location::Ssh { .. }, Location::Ssh { .. }) => {
-                    // FIXME: Could we support this?
-                    eprintln!(
-                        "Direct transfer between remote hosts is not supported"
-                    );
-                    std::process::exit(2);
-                }
-            }
+            };
+            do_sync(source_obj, sink_obj)
         }
         _ => {
             cli.print_help().expect("Can't print help");
