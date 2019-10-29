@@ -16,12 +16,12 @@ struct TempFile {
     file: File,
     temp_file_id: u32,
     temp_path: PathBuf,
-    destination: PathBuf,
+    name: PathBuf,
 }
 
 impl TempFile {
-    fn move_to_destination(self) -> Result<(), std::io::Error> {
-        std::fs::rename(self.temp_path, self.destination)
+    fn move_to_destination(self, root_dir: &Path) -> Result<(), std::io::Error> {
+        std::fs::rename(self.temp_path, root_dir.join(self.name))
     }
 }
 
@@ -69,15 +69,15 @@ impl<'a> FsSink<'a> {
     }
 
     fn finish_file(&mut self, file: TempFile) -> Result<(), Error> {
-        info!("File complete: {:?}", file.destination);
-        self.index.move_file(file.temp_file_id, &file.destination)?;
-        file.move_to_destination()?;
+        info!("File complete: {:?}", file.name);
+        self.index.move_file(file.temp_file_id, &file.name)?;
+        file.move_to_destination(self.root_dir)?;
         Ok(())
     }
 
     fn end_current_file(&mut self) -> Result<(), Error> {
         if let Some((size, file)) = self.current_file.take() {
-            debug!("File {:?} will be {} bytes", file.borrow().destination, size);
+            debug!("File {:?} will be {} bytes", file.borrow().name, size);
 
             // If we have the last reference to that TempFile, move it
             if let Ok(file) = Rc::try_unwrap(file) {
@@ -91,7 +91,7 @@ impl<'a> FsSink<'a> {
 impl<'a> Sink for FsSink<'a> {
     fn new_file(
         &mut self,
-        path: &Path,
+        name: &Path,
         modified: chrono::DateTime<chrono::Utc>,
     ) -> Result<(), Error>
     {
@@ -99,14 +99,14 @@ impl<'a> Sink for FsSink<'a> {
 
         // Make temp file path, which will be swapped at the end
         let temp_path = {
-            let mut base_name = path.file_name()
+            let mut base_name = name.file_name()
                 .ok_or(Error::Io(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
                     "Invalid file name",
                 )))?
                 .to_os_string();
             base_name.push(".part");
-            self.root_dir.join(path.with_file_name(base_name))
+            self.root_dir.join(name.with_file_name(base_name))
         };
 
         // Open it, but check if it existed
@@ -115,19 +115,19 @@ impl<'a> Sink for FsSink<'a> {
             .open(&temp_path)?;
 
         // Create temp file entry in the database
-        let file_id = self.index.add_file_overwrite(path, modified)?;
+        let file_id = self.index.add_file_overwrite(name, modified)?;
 
         // If file existed, index; it might have content from aborted download
         if file_exists {
             info!("Indexing previous part file {:?}", temp_path);
-            self.index.index_file(&temp_path)?;
+            self.index.index_file(&temp_path, name)?;
         }
 
         let file = TempFile {
             file,
             temp_file_id: file_id,
             temp_path,
-            destination: self.root_dir.join(path),
+            name: name.to_path_buf(),
         };
         let file = Rc::new(RefCell::new(file));
         self.current_file = Some((0, file));
@@ -149,16 +149,16 @@ impl<'a> Sink for FsSink<'a> {
 
         info!(
             "Next block: {} for {:?} offset={}",
-            hash, file.borrow().destination, *offset,
+            hash, file.borrow().name, *offset,
         );
 
         // We need to write this block to the current file
         match self.index.get_block(hash)? {
             // We know where to get it, copy it from there
-            Some((path, read_offset, _size)) => {
-                info!("Getting block from {:?} offset={}", path, read_offset);
+            Some((name, read_offset, _size)) => {
+                info!("Getting block from {:?} offset={}", name, read_offset);
                 let block = read_block(
-                    &self.root_dir.join(path),
+                    &self.root_dir.join(name),
                     read_offset,
                 )?;
                 write_block(&mut file.borrow_mut().file, *offset, &block)?;
@@ -207,7 +207,7 @@ impl<'a> Sink for FsSink<'a> {
             for (file, offset) in destinations.into_iter() {
                 info!(
                     "Writing block to {:?} offset={}",
-                    file.borrow().destination, offset,
+                    file.borrow().name, offset,
                 );
                 write_block(&mut file.borrow_mut().file, offset, block)?;
                 self.index.replace_block(
@@ -271,13 +271,13 @@ impl<'a> Source for FsSource<'a> {
         }
 
         // If there are more files left, read the next one in
-        if let Some((file_id, path, modified)) = self.files.pop_front() {
+        if let Some((file_id, name, modified)) = self.files.pop_front() {
             let blocks = self.index.list_file_blocks(file_id)?;
             self.blocks = blocks
                 .into_iter()
                 .map(|(hash, _offset, size)| (hash, size))
                 .collect();
-            return Ok(Some(IndexEvent::NewFile(path, modified)));
+            return Ok(Some(IndexEvent::NewFile(name, modified)));
         }
 
         // No more files
@@ -292,10 +292,10 @@ impl<'a> Source for FsSource<'a> {
     fn get_next_block(&mut self) -> Result<Option<(HashDigest, Vec<u8>)>, Error> {
         match self.requested_blocks.pop_front() {
             Some(hash) => {
-                if let Some((path, offset, _size)) = self.index.get_block(&hash)? {
+                if let Some((name, offset, _size)) = self.index.get_block(&hash)? {
                     Ok(Some((
                         hash,
-                        read_block(&self.root_dir.join(path), offset)?,
+                        read_block(&self.root_dir.join(name), offset)?,
                     )))
                 } else {
                     Err(Error::Io(std::io::Error::new(

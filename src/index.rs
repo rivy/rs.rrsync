@@ -380,10 +380,11 @@ impl<'a> IndexTransaction<'a> {
     /// Cut up a file into blocks and add them to the index
     pub fn index_file(
         &mut self,
+        path: &Path,
         name: &Path,
     ) -> Result<(), Error>
     {
-        let file = File::open(name)?;
+        let file = File::open(path)?;
         let (file_id, up_to_date) = self.add_file(
             name,
             file.metadata()?.modified()?.into(),
@@ -422,22 +423,30 @@ impl<'a> IndexTransaction<'a> {
 
     /// Index files and directories recursively
     pub fn index_path(&mut self, path: &Path) -> Result<(), Error> {
+        self.index_path_rec(path, Path::new(""))
+    }
+
+    fn index_path_rec(&mut self, root: &Path, rel: &Path) -> Result<(), Error> {
+        let path = root.join(rel);
         if path.is_dir() {
             info!("Indexing directory {:?}", path);
             for entry in path.read_dir()? {
                 if let Ok(entry) = entry {
-                    self.index_path(&entry.path())?;
+                    if entry.file_name() == ".rrsync.idx" {
+                        continue;
+                    }
+                    self.index_path_rec(root, &rel.join(entry.file_name()))?;
                 }
             }
             Ok(())
         } else {
-            let path = if path.starts_with(".") {
-                path.strip_prefix(".").unwrap()
+            let rel = if rel.starts_with(".") {
+                rel.strip_prefix(".").unwrap()
             } else {
-                path
+                rel
             };
-            info!("Indexing file {:?}", path);
-            self.index_file(&path)
+            info!("Indexing file {:?}", rel);
+            self.index_file(&path, &rel)
         }
     }
 
@@ -462,6 +471,7 @@ impl<'a> IndexTransaction<'a> {
 #[cfg(test)]
 mod tests {
     use std::io::Write;
+    use std::path::Path;
     use tempfile::NamedTempFile;
 
     use crate::HashDigest;
@@ -477,10 +487,11 @@ mod tests {
             write!(file, "Test content\n").expect("tempfile");
         }
         file.flush().expect("tempfile");
+        let name = Path::new("dir/name").to_path_buf();
         let mut index = Index::open_in_memory().expect("db");
         {
             let mut tx = index.transaction().expect("db");
-            tx.index_file(file.path()).expect("index");
+            tx.index_file(file.path(), &name).expect("index");
             tx.commit().expect("db");
         }
         assert!(
@@ -494,7 +505,7 @@ mod tests {
         )).expect("get");
         assert_eq!(
             block1,
-            Some((file.path().into(), 0, 11579)),
+            Some((name.clone(), 0, 11579)),
         );
         let block2 = index.get_block(&HashDigest(
             *b"\x57\x0d\x8b\x30\xfc\xfd\x58\x5e\x41\x27\
@@ -502,7 +513,7 @@ mod tests {
         )).expect("get");
         assert_eq!(
             block2,
-            Some((file.path().into(), 11579, 32768)),
+            Some((name.clone(), 11579, 32768)),
         );
         let block3 = index.get_block(&HashDigest(
             *b"\xb9\xa8\xc2\x64\x1a\xf2\xcf\x8f\xd8\xf3\
@@ -510,7 +521,7 @@ mod tests {
         )).expect("get");
         assert_eq!(
             block3,
-            Some((file.path().into(), 44347, 546)),
+            Some((name.clone(), 44347, 546)),
         );
         assert_eq!(block3.unwrap().1 - block2.unwrap().1, MAX_BLOCK_SIZE);
     }
