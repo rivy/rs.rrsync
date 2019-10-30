@@ -3,7 +3,7 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::collections::hash_map::{Entry, HashMap};
 use std::io::{Seek, SeekFrom, Write};
-use std::fs::{OpenOptions, File};
+use std::fs::{DirBuilder, File, OpenOptions};
 use std::ops::Not;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -111,6 +111,9 @@ impl<'a> Sink for FsSink<'a> {
 
         // Open it, but check if it existed
         let file_exists = temp_path.is_file();
+        if let Some(dir) = temp_path.parent() {
+            DirBuilder::new().recursive(true).create(dir)?;
+        }
         let file = OpenOptions::new().read(true).write(true).create(true)
             .open(&temp_path)?;
 
@@ -252,7 +255,8 @@ pub struct FsSource<'a> {
 impl<'a> FsSource<'a> {
     /// Create a source from the (source) index
     pub fn new(index: IndexTransaction<'a>, root_dir: &'a Path) -> Result<FsSource<'a>, Error> {
-        let files = index.list_files()?.into_iter().collect();
+        let files: VecDeque<_> = index.list_files()?.into_iter().collect();
+        info!("Source indexed, {} files", files.len());
         Ok(FsSource {
             index,
             root_dir,
@@ -315,9 +319,20 @@ pub struct FsSinkWrapper {
 }
 
 impl FsSinkWrapper {
-    pub fn new(path: &Path) -> FsSinkWrapper {
-        // TODO: Create index
-        unimplemented!()
+    pub fn new(path: &Path) -> Result<FsSinkWrapper, Error> {
+        let mut index = Index::open(&path.join(".rrsync.idx"))?;
+        {
+            let mut tx = index.transaction()?;
+            info!("Indexing destination into {:?}...", path.join(".rrsync.idx"));
+            tx.index_path(path)?;
+            tx.remove_missing_files(path)?;
+            tx.commit()?;
+        }
+        let path = path.to_path_buf();
+        Ok(FsSinkWrapper {
+            index,
+            path,
+        })
     }
 }
 
@@ -333,9 +348,20 @@ pub struct FsSourceWrapper {
 }
 
 impl FsSourceWrapper {
-    pub fn new(path: &Path) -> FsSourceWrapper {
-        // TODO: Create index
-        unimplemented!()
+    pub fn new(path: &Path) -> Result<FsSourceWrapper, Error> {
+        let mut index = Index::open(&path.join(".rrsync.idx"))?;
+        {
+            let mut tx = index.transaction()?;
+            info!("Indexing source into {:?}...", path.join(".rrsync.idx"));
+            tx.index_path(path)?;
+            tx.remove_missing_files(path)?;
+            tx.commit()?;
+        }
+        let path = path.to_path_buf();
+        Ok(FsSourceWrapper {
+            index,
+            path,
+        })
     }
 }
 

@@ -429,7 +429,7 @@ impl<'a> IndexTransaction<'a> {
     fn index_path_rec(&mut self, root: &Path, rel: &Path) -> Result<(), Error> {
         let path = root.join(rel);
         if path.is_dir() {
-            info!("Indexing directory {:?}", path);
+            info!("Indexing directory {:?} ({:?})", rel, path);
             for entry in path.read_dir()? {
                 if let Ok(entry) = entry {
                     if entry.file_name() == ".rrsync.idx" {
@@ -445,7 +445,7 @@ impl<'a> IndexTransaction<'a> {
             } else {
                 rel
             };
-            info!("Indexing file {:?}", rel);
+            info!("Indexing file {:?} ({:?})", rel, path);
             self.index_file(&path, &rel)
         }
     }

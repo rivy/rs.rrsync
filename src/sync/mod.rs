@@ -26,7 +26,7 @@ pub mod fs;
 use std::path::{Path, PathBuf};
 
 use crate::{Error, HashDigest};
-use crate::index::{Index, IndexTransaction};
+use crate::index::IndexTransaction;
 
 /// The sink, representing where the files are being sent.
 ///
@@ -54,6 +54,7 @@ pub trait Sink {
 }
 
 /// Events that are received from the index data.
+#[derive(Debug)]
 pub enum IndexEvent {
     /// Start a new file (e.g. next `NewBlock` are blocks of that file)
     NewFile(PathBuf, chrono::DateTime<chrono::Utc>),

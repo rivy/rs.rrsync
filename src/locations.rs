@@ -61,7 +61,7 @@ impl Location {
 
     pub fn open_sink(&self) -> Result<Box<dyn SinkWrapper>, Error> {
         let w = match self {
-            Location::Local(path) => Box::new(FsSinkWrapper::new(path)),
+            Location::Local(path) => Box::new(FsSinkWrapper::new(path)?),
             Location::Ssh { user, host, path } => unimplemented!(), // TODO: SSH
             Location::Http(url) => {
                 // Shouldn't happen, caught in main.rs
@@ -76,7 +76,7 @@ impl Location {
 
     pub fn open_source(&self) -> Result<Box<dyn SourceWrapper>, Error> {
         let w = match self {
-            Location::Local(path) => Box::new(FsSourceWrapper::new(path)),
+            Location::Local(path) => Box::new(FsSourceWrapper::new(path)?),
             Location::Ssh { user, host, path } => unimplemented!(), // TODO: SSH
             Location::Http(url) => unimplemented!(), // TODO: HTTP
         };
