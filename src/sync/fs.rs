@@ -95,10 +95,12 @@ impl<'a> Sink for FsSink<'a> {
         modified: chrono::DateTime<chrono::Utc>,
     ) -> Result<(), Error>
     {
+        info!("Next file: {:?}", name);
+
         self.end_current_file()?;
 
         // Make temp file path, which will be swapped at the end
-        let temp_path = {
+        let temp_name = {
             let mut base_name = name.file_name()
                 .ok_or(Error::Io(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
@@ -106,8 +108,9 @@ impl<'a> Sink for FsSink<'a> {
                 )))?
                 .to_os_string();
             base_name.push(".part");
-            self.root_dir.join(name.with_file_name(base_name))
+            name.with_file_name(base_name)
         };
+        let temp_path = self.root_dir.join(&temp_name);
 
         // Open it, but check if it existed
         let file_exists = temp_path.is_file();
@@ -118,12 +121,12 @@ impl<'a> Sink for FsSink<'a> {
             .open(&temp_path)?;
 
         // Create temp file entry in the database
-        let file_id = self.index.add_file_overwrite(name, modified)?;
+        let file_id = self.index.add_file_overwrite(&temp_name, modified)?;
 
         // If file existed, index; it might have content from aborted download
         if file_exists {
             info!("Indexing previous part file {:?}", temp_path);
-            self.index.index_file(&temp_path, name)?;
+            self.index.index_file(&temp_path, &temp_name)?;
         }
 
         let file = TempFile {
