@@ -3,15 +3,19 @@ use std::path::PathBuf;
 use crate::Error;
 use crate::sync::{SinkWrapper, SourceWrapper};
 use crate::sync::fs::{FsSinkWrapper, FsSourceWrapper};
+use crate::sync::ssh::SshWrapper;
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct SshLocation {
+    pub user: Option<String>,
+    pub host: String,
+    pub path: String,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Location {
     Local(PathBuf),
-    Ssh {
-        user: Option<String>,
-        host: String,
-        path: String,
-    },
+    Ssh(SshLocation),
     Http(String),
 }
 
@@ -33,11 +37,11 @@ impl Location {
             };
             let path = &s[idx_colon + 1 ..];
 
-            Some(Location::Ssh {
+            Some(Location::Ssh(SshLocation {
                 user: user.map(Into::into),
                 host: host.into(),
                 path: path.into(),
-            })
+            }))
         } else if s.starts_with("file:///") {
             // FIXME: Unquote path?
             Some(Location::Local(s[7..].into()))
@@ -59,10 +63,10 @@ impl Location {
         }
     }
 
-    pub fn open_sink(&self) -> Result<Box<dyn SinkWrapper>, Error> {
-        let w = match self {
-            Location::Local(path) => Box::new(FsSinkWrapper::new(path)?),
-            Location::Ssh { user, host, path } => unimplemented!(), // TODO: SSH
+    pub fn open_sink(self) -> Result<Box<dyn SinkWrapper>, Error> {
+        let w: Box<dyn SinkWrapper> = match self {
+            Location::Local(path) => Box::new(FsSinkWrapper::new(&path)?),
+            Location::Ssh(ssh) => Box::new(SshWrapper(ssh)),
             Location::Http(url) => {
                 // Shouldn't happen, caught in main.rs
                 return Err(Error::Io(std::io::Error::new(
@@ -74,10 +78,10 @@ impl Location {
         Ok(w)
     }
 
-    pub fn open_source(&self) -> Result<Box<dyn SourceWrapper>, Error> {
-        let w = match self {
-            Location::Local(path) => Box::new(FsSourceWrapper::new(path)?),
-            Location::Ssh { user, host, path } => unimplemented!(), // TODO: SSH
+    pub fn open_source(self) -> Result<Box<dyn SourceWrapper>, Error> {
+        let w: Box<dyn SourceWrapper> = match self {
+            Location::Local(path) => Box::new(FsSourceWrapper::new(&path)?),
+            Location::Ssh(ssh) => Box::new(SshWrapper(ssh)),
             Location::Http(url) => unimplemented!(), // TODO: HTTP
         };
         Ok(w)
@@ -86,7 +90,7 @@ impl Location {
 
 #[cfg(test)]
 mod tests {
-    use super::Location;
+    use super::{Location, SshLocation};
 
     #[test]
     fn test_parse() {
@@ -120,19 +124,19 @@ mod tests {
         );
         assert_eq!(
             Location::parse("ssh://user@host:path"),
-            Some(Location::Ssh {
+            Some(Location::Ssh(SshLocation {
                 user: Some("user".into()),
                 host: "host".into(),
                 path: "path".into(),
-            }),
+            })),
         );
         assert_eq!(
             Location::parse("ssh://host:"),
-            Some(Location::Ssh {
+            Some(Location::Ssh(SshLocation {
                 user: None,
                 host: "host".into(),
                 path: "".into(),
-            }),
+            })),
         );
         assert_eq!(
             Location::parse("ssh://host"),
