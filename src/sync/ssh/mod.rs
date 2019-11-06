@@ -11,6 +11,39 @@ use crate::locations::SshLocation;
 use crate::sync::{IndexEvent, Sink, SinkWrapper, Source, SourceWrapper};
 use self::proto::{CommunicationError, SyncReader, path_from_u8, path_to_u8};
 
+/// A channel Receiver variant that can be waited on without consuming
+struct PeekableReceiver<T> {
+    inner: mpsc::Receiver<T>,
+    peeked: Option<Result<T, mpsc::RecvError>>,
+}
+
+impl<T> PeekableReceiver<T> {
+    fn new(inner: mpsc::Receiver<T>) -> PeekableReceiver<T> {
+        PeekableReceiver {
+            inner,
+            peeked: None,
+        }
+    }
+
+    fn try_recv(&mut self) -> Result<T, mpsc::TryRecvError> {
+        match self.peeked.take() {
+            None => self.inner.try_recv(),
+            Some(Ok(elem)) => Ok(elem),
+            Some(Err(mpsc::RecvError)) => Err(mpsc::TryRecvError::Disconnected),
+        }
+    }
+
+    fn peek(&self) -> Option<Result<&T, &mpsc::RecvError>> {
+        self.peeked.as_ref().map(Result::as_ref)
+    }
+
+    fn wait(&mut self) {
+        if self.peeked.is_none() {
+            self.peeked = Some(self.inner.recv());
+        }
+    }
+}
+
 /// The wrapper for SSH endpoints
 pub struct SshWrapper(pub SshLocation);
 
