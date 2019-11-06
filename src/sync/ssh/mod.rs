@@ -85,7 +85,7 @@ fn recv_errors<R: Read>(stderr: R, prefix: &'static str) {
 pub struct SshSink<W: Write> {
     child: Option<Child>,
     writer: W,
-    block_reqs_rx: mpsc::Receiver<Option<HashDigest>>,
+    block_reqs_rx: PeekableReceiver<Option<HashDigest>>,
     done: bool,
 }
 
@@ -119,13 +119,18 @@ impl<W: Write> SshSink<W> {
         SshSink {
             child: None,
             writer: stdin,
-            block_reqs_rx,
+            block_reqs_rx: PeekableReceiver::new(block_reqs_rx),
             done: false,
         }
     }
 }
 
 impl<W: Write> Sink for SshSink<W> {
+    fn wait(&mut self) -> Result<(), Error> {
+        // We're always ready
+        Ok(())
+    }
+
     fn new_file(
         &mut self,
         name: &Path,
@@ -164,6 +169,7 @@ impl<W: Write> Sink for SshSink<W> {
     }
 
     fn next_requested_block(&mut self) -> Result<Option<HashDigest>, Error> {
+        warn!("next_requested_block");
         let hash = match self.block_reqs_rx.try_recv() {
             Ok(Some(hash)) => Some(hash),
             Ok(None) => {
@@ -250,18 +256,22 @@ impl SinkWrapper for SshWrapper {
         Ok(Box::new(SshSink {
             child: Some(child),
             writer: stdin,
-            block_reqs_rx,
+            block_reqs_rx: PeekableReceiver::new(block_reqs_rx),
             done: false,
         }))
     }
+}
+
+enum SourceEvent {
+    Index(IndexEvent),
+    Block(HashDigest, Vec<u8>),
 }
 
 /// Source reading from a remote machine via SSH
 pub struct SshSource<W: Write> {
     child: Option<Child>,
     writer: W,
-    index_rx: mpsc::Receiver<IndexEvent>,
-    blocks_rx: mpsc::Receiver<(HashDigest, Vec<u8>)>,
+    index_or_block_rx: PeekableReceiver<SourceEvent>,
 }
 
 impl<W: Write> Drop for SshSource<W> {
@@ -286,31 +296,41 @@ impl<W: Write> SshSource<W> {
     pub fn piped<R>(stdin: W, stdout: R) -> SshSource<W>
         where R: Read + Send + 'static
     {
-        let (index_tx, index_rx) = mpsc::channel();
-        let (blocks_tx, blocks_rx) = mpsc::sync_channel(1);
-        thread::spawn(move || recv_from_source(stdout, index_tx, blocks_tx));
+        let (index_or_block_tx, index_or_block_rx) = mpsc::channel();
+        thread::spawn(move || recv_from_source(stdout, index_or_block_tx));
         SshSource {
             child: None,
             writer: stdin,
-            index_rx,
-            blocks_rx,
+            index_or_block_rx: PeekableReceiver::new(index_or_block_rx),
         }
     }
 }
 
 impl<W: Write> Source for SshSource<W> {
+    fn wait(&mut self) -> Result<(), Error> {
+        self.index_or_block_rx.wait();
+        Ok(())
+    }
+
     fn next_from_index(&mut self) -> Result<Option<IndexEvent>, Error> {
-        let event = match self.index_rx.try_recv() {
-            Ok(event) => Some(event),
-            Err(mpsc::TryRecvError::Empty) => None,
-            Err(e @ mpsc::TryRecvError::Disconnected) => {
+        // Check the right event is available
+        match self.index_or_block_rx.peek() {
+            Some(Ok(SourceEvent::Index(_))) => {}
+            Some(Ok(_)) | None => return Ok(None),
+            Some(Err(mpsc::RecvError)) => {
                 return Err(Error::Io(std::io::Error::new(
                     std::io::ErrorKind::BrokenPipe,
-                    e,
+                    mpsc::RecvError,
                 )));
             }
+        }
+
+        // Consume it
+        let event = match self.index_or_block_rx.try_recv() {
+            Ok(SourceEvent::Index(event)) => event,
+            _ => panic!(),
         };
-        Ok(event)
+        Ok(Some(event))
     }
 
     fn request_block(&mut self, hash: &HashDigest) -> Result<(), Error> {
@@ -321,16 +341,24 @@ impl<W: Write> Source for SshSource<W> {
     fn get_next_block(
         &mut self,
     ) -> Result<Option<(HashDigest, Vec<u8>)>, Error> {
-        let res = match self.blocks_rx.recv() {
-            Ok(r) => Some(r),
-            Err(e @ mpsc::RecvError) => {
+        // Check the right event is available
+        match self.index_or_block_rx.peek() {
+            Some(Ok(SourceEvent::Block(_, _))) => {}
+            Some(Ok(_)) | None => return Ok(None),
+            Some(Err(mpsc::RecvError)) => {
                 return Err(Error::Io(std::io::Error::new(
                     std::io::ErrorKind::BrokenPipe,
-                    e,
+                    mpsc::RecvError,
                 )));
             }
+        }
+
+        // Consume it
+        let res = match self.index_or_block_rx.try_recv() {
+            Ok(SourceEvent::Block(hash, block)) => (hash, block),
+            _ => panic!(),
         };
-        Ok(res)
+        Ok(Some(res))
     }
 
     fn end(&mut self) -> Result<(), Error> {
@@ -342,8 +370,7 @@ impl<W: Write> Source for SshSource<W> {
 /// Decode stream from the remote source, parsing instructions and blocks
 fn recv_from_source<R: Read>(
     mut reader: R,
-    index_tx: mpsc::Sender<IndexEvent>,
-    blocks_tx: mpsc::SyncSender<(HashDigest, Vec<u8>)>,
+    index_or_block_tx: mpsc::Sender<SourceEvent>,
 ) {
     let mut reader = SyncReader::new(|buf| {
         let n = reader.read(buf)?;
@@ -385,7 +412,7 @@ fn recv_from_source<R: Read>(
                     modified,
                 );
                 info!("Got file from source");
-                index_tx.send(event).unwrap();
+                index_or_block_tx.send(SourceEvent::Index(event)).unwrap();
             } else if &reader[cmd.clone()] == b"BLOCK" {
                 let hash = reader.read_str()?;
                 reader.read_space()?;
@@ -407,12 +434,14 @@ fn recv_from_source<R: Read>(
 
                 info!("Got block from source");
                 let event = IndexEvent::NewBlock(hash, size);
-                index_tx.send(event).unwrap();
+                index_or_block_tx.send(SourceEvent::Index(event)).unwrap();
             } else if &reader[cmd.clone()] == b"END_FILES" {
                 reader.read_eol()?;
 
                 info!("Got end from source");
-                index_tx.send(IndexEvent::End).unwrap();
+                index_or_block_tx.send(
+                    SourceEvent::Index(IndexEvent::End),
+                ).unwrap();
             } else if &reader[cmd] == b"DATA" {
                 let hash = reader.read_str()?;
                 reader.read_space()?;
@@ -427,7 +456,9 @@ fn recv_from_source<R: Read>(
                     ))?;
 
                 info!("Got data from source");
-                blocks_tx.send((hash, block)).unwrap();
+                index_or_block_tx.send(
+                    SourceEvent::Block(hash, block),
+                ).unwrap();
             } else {
                 return Err(CommunicationError::ProtocolError(
                     "Invalid command",
@@ -447,15 +478,13 @@ impl SourceWrapper for SshWrapper {
         let stdout = child.stdout.take().unwrap();
         let stderr = child.stderr.take().unwrap();
         let stdin = child.stdin.take().unwrap();
-        let (index_tx, index_rx) = mpsc::channel();
-        let (blocks_tx, blocks_rx) = mpsc::sync_channel(1);
+        let (index_or_block_tx, index_or_block_rx) = mpsc::channel();
         thread::spawn(move || recv_errors(stderr, "source"));
-        thread::spawn(move || recv_from_source(stdout, index_tx, blocks_tx));
+        thread::spawn(move || recv_from_source(stdout, index_or_block_tx));
         Ok(Box::new(SshSource {
             child: Some(child),
             writer: stdin,
-            index_rx,
-            blocks_rx,
+            index_or_block_rx: PeekableReceiver::new(index_or_block_rx),
         }))
     }
 }

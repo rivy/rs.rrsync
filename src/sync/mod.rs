@@ -35,6 +35,8 @@ use crate::index::IndexTransaction;
 /// encapsulating some network protocol, and the receiving side has a sink that
 /// actually updates files.
 pub trait Sink {
+    fn wait(&mut self) -> Result<(), Error>;
+
     /// Start on a new file
     fn new_file(
         &mut self,
@@ -85,6 +87,8 @@ pub enum IndexEvent {
 /// that reads from files, and the receiving side has a source that reads from
 /// the network.
 pub trait Source {
+    fn wait(&mut self) -> Result<(), Error>;
+
     /// Get the next event from the index data
     fn next_from_index(&mut self) -> Result<Option<IndexEvent>, Error>;
 
@@ -120,6 +124,10 @@ impl<R: Sink> SinkExt for R {
 }
 
 impl<R: Sink + ?Sized> Sink for Box<R> {
+    fn wait(&mut self) -> Result<(), Error> {
+        (**self).wait()
+    }
+
     fn new_file(
         &mut self,
         path: &Path,
@@ -158,6 +166,10 @@ impl<R: Sink + ?Sized> Sink for Box<R> {
 }
 
 impl<S: Source + ?Sized> Source for Box<S> {
+    fn wait(&mut self) -> Result<(), Error> {
+        (**self).wait()
+    }
+
     fn next_from_index(&mut self) -> Result<Option<IndexEvent>, Error> {
         (**self).next_from_index()
     }
@@ -215,12 +227,20 @@ pub fn do_sync<S: Source, R: Sink>(
 ) -> Result<(), Error> {
     let mut instructions = true;
     while instructions || sink.is_missing_blocks()? {
-        info!("pumping");
         // Things are done in order so that bandwidth is used in a smart way
         // For example, if you block on sending block data, you will have
         // received more block requests in the next loop, and you'll only
         // transmit (sender side) or process (receiver side) index instructions
         // when there's nothing better to do
+
+        // Avoid busy-looping by waiting for some readiness signal
+        // Usually one of the two does nothing because it a Fs{Source,Sink}
+        info!("Waiting for source...");
+        source.wait()?;
+        info!("Waiting for sink...");
+        sink.wait()?;
+        info!("pumping");
+
         if let Some(hash) = sink.next_requested_block()? {
             // Block requests
             info!("block request {}", hash);

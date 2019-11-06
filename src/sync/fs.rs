@@ -98,6 +98,11 @@ impl<'a> FsSink<'a> {
 }
 
 impl<'a> Sink for FsSink<'a> {
+    fn wait(&mut self) -> Result<(), Error> {
+        // We're always ready
+        Ok(())
+    }
+
     fn new_file(
         &mut self,
         name: &Path,
@@ -292,6 +297,11 @@ impl<'a> FsSource<'a> {
 }
 
 impl<'a> Source for FsSource<'a> {
+    fn wait(&mut self) -> Result<(), Error> {
+        // We're always ready
+        Ok(())
+    }
+
     fn next_from_index(&mut self) -> Result<Option<IndexEvent>, Error> {
         // If there are blocks left in current file, return one
         if let Some((hash, size)) = self.blocks.pop_front() {
